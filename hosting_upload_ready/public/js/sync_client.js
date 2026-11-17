@@ -11,14 +11,18 @@
   const DEFAULT_DEV_LOCAL_IP = '127.0.0.1';
   const DEFAULT_DEV_PORT = 8080;
 
+  function isLoopbackHost(hostname) {
+    if (!hostname || typeof hostname !== 'string') return false;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname.startsWith('127.');
+  }
+
   function isLocalhost() {
     if (typeof window === 'undefined' || !window.location) return false;
-    const host = window.location.hostname;
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.startsWith('127.');
+    return isLoopbackHost(window.location.hostname);
   }
 
   function getDefaultServerUrl() {
-    // 1. في المتصفح: الاعتماد التلقائي على أصل النطاق الحالي (Same-Origin عبر HTTPS)
+    // 1. في المتصفح: الاعتماد التلقائي على أصل النطاق الحالي (Same-Origin عبر HTTPS أو HTTP)
     if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
       return window.location.origin;
     }
@@ -27,6 +31,10 @@
   }
 
   function getInitialServerUrl() {
+    const isBrowserWeb = (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http'));
+    // صفحات الويب تستخدم API من نفس الأصل حتى تبقى الجلسات وCookies وCSRF ضمن النطاق نفسه.
+    // لا نحذف القيمة القديمة من localStorage؛ نتجاهلها فقط في المتصفح، مع إبقاء إعداد تطبيق الهاتف أدناه.
+    if (isBrowserWeb) return window.location.origin;
     try {
       const saved = localStorage.getItem('taswoq_server_url');
       if (saved && typeof saved === 'string' && saved.trim()) {
@@ -202,7 +210,7 @@
 
     checkAuth: async function () {
       try {
-        const authBaseUrl = (isLocalhost() && typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http'))
+        const authBaseUrl = (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http'))
           ? window.location.origin
           : this._serverUrl;
         const res = await fetch(`${authBaseUrl}/api/auth/me`, {

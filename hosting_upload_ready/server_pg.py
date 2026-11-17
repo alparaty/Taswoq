@@ -207,24 +207,33 @@ import ssl
 # قائمة عناوين الوكلاء العكسيين الموثوقين (مثل Nginx المحلي على نفس الخادم)
 TRUSTED_PROXIES = {p.strip() for p in os.environ.get("TRUSTED_PROXIES", "127.0.0.1,::1,localhost").split(",") if p.strip()}
 
-def is_request_secure(handler):
-    """
-    التحقق الصارم والموثوق من كون الطلب آمناً (HTTPS):
-    1. متغير البيئة الإجباري TASWOQ_COOKIE_SECURE=1 (في بيئة الإنتاج)
-    2. اتصال TLS/SSL مباشر على المقبس
-    3. ترويسة X-Forwarded-Proto: https إذا وفقط إذا كان الطلب قادماً من وكيل عكسي موثوق (Nginx 127.0.0.1)
-       (يمنع تزوير ترويسة X-Forwarded-Proto من أي عميل خارجي مباشرة)
-    """
-    if os.environ.get("TASWOQ_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes"):
-        return True
-    if hasattr(handler, "connection") and hasattr(handler.connection, "cipher"):
-        return True
+def is_transport_secure(handler):
+    """تحقق من HTTPS الفعلي أو من ترويسة HTTPS الواردة عبر وكيل موثوق فقط."""
+    connection = getattr(handler, "connection", None)
+    if connection is not None and hasattr(connection, "cipher"):
+        try:
+            if connection.cipher():
+                return True
+        except Exception:
+            pass
+
     client_ip = handler.client_address[0] if getattr(handler, "client_address", None) else ""
-    if client_ip in TRUSTED_PROXIES:
-        proto = handler.headers.get("X-Forwarded-Proto", "").strip().lower()
+    normalized_ip = client_ip.lower()
+    if normalized_ip.startswith("::ffff:"):
+        normalized_ip = normalized_ip[len("::ffff:"):]
+    if normalized_ip in TRUSTED_PROXIES:
+        headers = getattr(handler, "headers", {})
+        proto = headers.get("X-Forwarded-Proto", "").strip().lower()
         if proto == "https":
             return True
     return False
+
+
+def is_request_secure(handler):
+    """تحديد سمة Secure للكوكي؛ إعدادها لا يُعد دليلاً على أن النقل مشفر فعلياً."""
+    if os.environ.get("TASWOQ_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return is_transport_secure(handler)
 
 # =========================================================
 # إدارة جلسات المشرفين، التحقق من الصلاحيات (RBAC)، وحماية CSRF
@@ -491,7 +500,7 @@ def check_admin_permission(admin_user, required_perm):
     if admin_user.get("mustChangePassword") and admin_user.get("role") != "developer_admin":
         return False
     # المدير الأساسي الموثق من DB وحساب المطور يملكان صلاحيات النظام المطلقة
-    if admin_user.get("isPrimaryAdmin") is True or admin_user.get("role") == "developer_admin":
+    if admin_user.get("isPrimaryAdmin") is True or admin_user.get("role") in ("developer_admin", "admin", "primary_admin"):
         return True
     
     # فحص الصلاحيات الصريحة للمستخدم
@@ -1627,7 +1636,7 @@ class TaswoqSyncHandler(SimpleHTTPRequestHandler):
         # 1.1 تسجيل دخول المطوّر السري POST /api/auth/developer/login
         if path == "/api/auth/developer/login":
             # اشتراط HTTPS الموثوق
-            if not is_request_secure(self):
+            if not is_transport_secure(self):
                 self._send_json(403, {"success": False, "error": "تسجيل دخول المطور يتطلب اتصال HTTPS موثوق حصراً"})
                 return
 

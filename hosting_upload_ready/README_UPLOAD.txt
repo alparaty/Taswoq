@@ -1,14 +1,22 @@
-Taswoq hosting upload package - 2026-11-15
+تسوق — ملفات رفع الاستضافة (نسخة محلية)
+========================================
 
-This package was assembled from the current Taswoq_Cleaned working tree, including uncommitted working-copy changes present at build time. It contains the PostgreSQL production server and the complete public web directory.
+هذه الحزمة نُسخت من أحدث ملفات Taswoq_Cleaned إلى هذا المجلد. ارفع محتويات المجلد إلى /var/www/taswoq مع الحفاظ على بنية المجلدات، واجعل Nginx يخدم /var/www/taswoq/public.
 
-Before deployment:
-1. Read DEPLOYMENT_GUIDE_VPS_CLOUDFLARE.md and POSTGRES_MIGRATION.md.
-2. Replace domain and host placeholders in the Nginx configuration and deployment settings.
-3. Create real secrets directly on the VPS. .env.production.example is a template only; do not use it as a production secrets file.
-4. Confirm the intended production database and take a backup before any schema migration or data import. Those actions are not performed by this package build.
-5. Install the service and Nginx configuration according to the guide, then validate them on the VPS before exposing the site.
+المحتويات:
+- server_pg.py وملفات PostgreSQL والمخطط والترحيلات.
+- public/ وفيه صفحات الويب وملفات JavaScript وCSS والصور.
+- إعدادات taswoq.service وnginx-taswoq.conf.
+- أدلة النشر والهجرة وقوالب البيئة.
+- أدوات إدارة المدير والمطور. create_admin.py وcreate_developer_user.py وsetup_developer_secret.py أدوات إدارية ولا تعمل تلقائياً.
 
-This is a file bundle only. No VPS upload, database connection, migration, production test, DNS change, commit, or push was performed. It does not establish that the deployment is production-ready.
+الأمان والبيانات:
+- لا يحتوي هذا المجلد على ملف .env فعلي أو كلمات مرور أو رموز سرية.
+- لا يحتوي على taswoq_db.json أو نسخ قواعد بيانات، ولا على APK أو مفاتيح توقيع أو مجلد Git.
+- .env.example و.env.production.example قوالب فقط. أنشئ ملف البيئة الحقيقي على الخادم وأدخل القيم السرية هناك، ولا ترفعها هنا.
+- لا تشغّل apply_schema_migrations.py أو migrate_to_postgres.py أو أدوات تهيئة الحسابات إلا بعد مراجعة مخطط قاعدة الاختبار/الإنتاج وأخذ النسخ الاحتياطية والموافقة على التنفيذ.
 
-Excluded intentionally: Git metadata, local JSON databases and backups, real .env files, APKs, signing keystores, tests, local-only server.py, caches, and temporary files.
+قبل تشغيل Nginx:
+- nginx-taswoq.conf يحتوي مكاناً مؤقتاً <نطاقي> ومسارات شهادة نموذجية؛ استبدلها بالنطاق والشهادة الفعليين واختبر إعداد Nginx قبل إعادة تحميله.
+- لا يُفعّل هذا المجلد HTTPS وحده. يجب إعداد شهادة TLS موثوقة على الخادم، ثم استخدام رابط https.
+- هذه عملية تجهيز ملفات فقط؛ لم يحدث اتصال بالخادم أو قاعدة البيانات ولم يتم نشر الملفات.

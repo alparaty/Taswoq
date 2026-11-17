@@ -222,6 +222,10 @@ const state = {
   resetPasswordTargetUser: null
 };
 window.state = state;
+try {
+  const cachedUser = localStorage.getItem('taswoq_active_user') || localStorage.getItem('tasweeq_current_user');
+  if (cachedUser) state.currentUser = JSON.parse(cachedUser);
+} catch (e) { }
 
 // Global Persistence Helpers for Taswoq Web
 function persistProducts() {
@@ -423,7 +427,7 @@ window.getActiveCsrfToken = getActiveCsrfToken;
         gm.email = '';
       }
       if (!gm.passwordHash) gm.passwordHash = 'Admin@2026';
-      if (!gm.permissions || !gm.permissions.includes('all')) gm.permissions = ['all'];
+      if (!gm.permissions || (Array.isArray(gm.permissions) ? !gm.permissions.includes('all') : !gm.permissions['all'])) gm.permissions = ['all'];
     }
 
     // Purge prototype demo employee accounts so NO employee account exists unless created by the admin
@@ -6410,8 +6414,11 @@ function addAuditLog(action, actionTitle, details, targetUserId = null, targetUs
 // 2. Active Session Verification & Kickout on Disable / Delete
 function verifyCurrentSessionActive(showReason = true) {
   if (!state.currentUser) return true;
-  // حساب المطور البرمجي مصادق عليه عبر الخادم ولا يخضع لقائمة المستخدمين المحلية المؤقتة
+  // الحسابات المصادقة عبر جلسة الخادم لا تخضع لمسح الذاكرة المحلية المؤقتة
   if (state.currentUser.role === 'developer_admin' || state.currentUser.id === 'usr_developer' || state.currentUser.username === 'usr_developer') {
+    return true;
+  }
+  if (isPrimaryAdmin(state.currentUser) || state.currentUser.role === 'primary_admin' || state.currentUser.isPrimaryAdmin === true) {
     return true;
   }
 
@@ -6437,28 +6444,14 @@ function verifyCurrentSessionActive(showReason = true) {
     (currentUsername && u.username && u.username.toLowerCase() === currentUsername.toLowerCase())
   );
 
-  // إذا لم يُعثر على المستخدم في القائمة، نتأكد هل يملك المستخدم صلاحية الوصول لكامل المستخدمين أم أنه موظف محدود
-  // الموظف المحدود لا تصله قائمة المستخدمين في المزامنة الأمنية
-  const userPerms = state.currentUser.permissions || [];
-  const canAccessUsers = Boolean(
-    state.currentUser.isPrimaryAdmin ||
-    state.currentUser.role === 'primary_admin' ||
-    state.currentUser.role === 'admin' ||
-    userPerms.includes('all') ||
-    userPerms.includes('users') ||
-    userPerms.includes('users:read') ||
-    userPerms.includes('users:write')
-  );
-  if (!liveUser && !canAccessUsers) {
+  // إذا لم يُعثر على المستخدم في الذاكرة المؤقتة، فلا نطرده لأنه موثق عبر جلسة الخادم
+  if (!liveUser) {
     return true;
   }
 
-  // If user does not exist (DELETED) or isActive is false (DISABLED)
-  if (!liveUser || !liveUser.isActive) {
-    const isDeleted = !liveUser;
-    const reasonMsg = isDeleted
-      ? '⛔ تم إنهاء جلستك وتحويلك لشاشة تسجيل الدخول لأن حسابك تم حذفه من قبل الإدارة.'
-      : '⛔ تم إنهاء جلستك وتحويلك لشاشة تسجيل الدخول لأن حسابك تم تعطيله من قبل الإدارة.';
+  // فقط إذا كان المستخدم موجوداً في القائمة ومحكوماً صراحة بأنه غير نشط (معطل)
+  if (liveUser.isActive === false) {
+    const reasonMsg = '⛔ تم إنهاء جلستك وتحويلك لشاشة تسجيل الدخول لأن حسابك تم تعطيله من قبل الإدارة.';
 
     // Perform full, clean logout action
     confirmLogoutAction();
@@ -7400,19 +7393,29 @@ function confirmLogoutAction() {
 
 // 14. Apply Role-Based Permissions (RBAC) to UI
 
+// Robust Permission Evaluation Helper (دعم كامل للقواميس والمصفوفات والنصوص)
+function checkPerm(perms, p) {
+  if (!perms) return false;
+  if (Array.isArray(perms)) {
+    return perms.includes('all') || perms.includes(p) || perms.includes(`${p}:read`) || perms.includes(`${p}:write`);
+  }
+  if (typeof perms === 'object') {
+    return Boolean(perms['all'] || perms[p] || perms[`${p}:read`] || perms[`${p}:write`]);
+  }
+  if (typeof perms === 'string') {
+    return perms === 'all' || perms === p;
+  }
+  return false;
+}
+window.checkPerm = checkPerm;
+
 // Centralized Permission Checker (دالة فحص الصلاحيات الموحدة)
 function hasUserPermission(permKey) {
   const user = (typeof state !== 'undefined') ? state.currentUser : null;
   if (!user) return false;
-  if (user.isPrimaryAdmin === true) return true;
-  const perms = user.permissions || {};
-  if (typeof perms === 'object' && !Array.isArray(perms)) {
-    return perms['all'] === true || perms[permKey] === true;
-  }
-  if (Array.isArray(perms)) {
-    return perms.includes('all') || perms.includes(permKey);
-  }
-  return false;
+  if (isPrimaryAdmin(user) || user.isPrimaryAdmin === true || user.role === 'primary_admin') return true;
+  if (user.role === 'developer_admin' || user.id === 'usr_developer') return true;
+  return checkPerm(user.permissions, permKey);
 }
 window.hasUserPermission = hasUserPermission;
 
@@ -7421,33 +7424,27 @@ function canUserAccessTab(user, tabKey) {
   if (!user) return false; // Strictly block unauthenticated visitors
 
   // Full access exclusively for General Manager (الصلاحيات الكاملة للمدير العام)
-  if (isPrimaryAdmin(user)) return true;
+  if (isPrimaryAdmin(user) || user.isPrimaryAdmin === true || user.role === 'primary_admin') return true;
 
   const perms = user.permissions || [];
   const isDeveloper = Boolean(user.role === 'developer_admin' || user.id === 'usr_developer');
-  const hasAll = Array.isArray(perms) ? perms.includes('all') : Boolean(perms && perms['all']);
+  const hasAll = isDeveloper || checkPerm(perms, 'all');
 
   // صلاحية all تمنح المطور والمستخدم المخول الوصول لكافة الأقسام بما فيها users و settings
   if (hasAll) return true;
 
-  // فحص صلاحيات القسم المحددة
-  const hasPerm = (p) => {
-    if (Array.isArray(perms)) return perms.includes(p);
-    if (typeof perms === 'object' && perms) return Boolean(perms[p]);
-    return false;
-  };
-
   // أقسام المدير العام والموظفين المخولين بصلاحيات الإدارة
   if (tabKey === 'users' || tabKey === 'settings') {
-    if (isDeveloper || hasPerm(tabKey) || hasPerm(`${tabKey}:read`) || hasPerm(`${tabKey}:write`)) {
+    if (isDeveloper || checkPerm(perms, tabKey)) {
       return true;
     }
     return false;
   }
 
-  // فحص الصلاحية الفعلية للقسم (بما فيها قسم dashboard الذي يتطلب صلاحية dashboard الصريحة من الخادم)
-  return hasPerm(tabKey) || hasPerm(`${tabKey}:read`) || hasPerm(`${tabKey}:write`);
+  // فحص الصلاحية الفعلية للقسم
+  return checkPerm(perms, tabKey);
 }
+window.canUserAccessTab = canUserAccessTab;
 
 function applyUserPermissions() {
   const user = state.currentUser;
@@ -7473,13 +7470,13 @@ function applyUserPermissions() {
     return;
   }
 
-  const isPrimary = isPrimaryAdmin(user);
+  const isPrimary = Boolean(isPrimaryAdmin(user) || user.isPrimaryAdmin === true || user.role === 'primary_admin');
   const isDeveloper = Boolean(user && (user.role === 'developer_admin' || user.id === 'usr_developer'));
   const perms = user.permissions || [];
-  const hasAll = isPrimary || isDeveloper || perms.includes('all');
+  const hasAll = isPrimary || isDeveloper || checkPerm(perms, 'all');
 
   // Users tab is for General Manager, Developer, or accounts granted 'users' permission
-  const canAccessUsers = isPrimary || isDeveloper || hasAll || hasUserPermission('users') || hasUserPermission('users:read');
+  const canAccessUsers = isPrimary || isDeveloper || hasAll || checkPerm(perms, 'users');
   if (usersMenuItem) {
     usersMenuItem.style.display = canAccessUsers ? 'flex' : 'none';
   }
@@ -7509,7 +7506,7 @@ function applyUserPermissions() {
   });
 
   // Send Push Notification button visibility based on permission (يحتسب صلاحية all والمطور والمدير العام)
-  const canSendPush = isPrimary || isDeveloper || hasAll || hasUserPermission('notifications') || hasUserPermission('notifications:write');
+  const canSendPush = isPrimary || isDeveloper || hasAll || checkPerm(perms, 'notifications');
   const sendPushBtn = document.getElementById('admin-send-push-btn');
   if (sendPushBtn) {
     sendPushBtn.style.display = canSendPush ? 'inline-flex' : 'none';
@@ -7518,9 +7515,7 @@ function applyUserPermissions() {
   Object.entries(tabMapping).forEach(([permKey, menuId]) => {
     const el = document.getElementById(menuId);
     if (!el) return;
-    const hasThisPerm = Array.isArray(perms)
-      ? (perms.includes(permKey) || perms.includes(`${permKey}:read`) || perms.includes(`${permKey}:write`) || perms.includes('all'))
-      : Boolean(perms && (perms[permKey] || perms[`${permKey}:read`] || perms[`${permKey}:write`] || perms['all']));
+    const hasThisPerm = checkPerm(perms, permKey);
     if (isPrimary || isDeveloper || hasAll || hasThisPerm) {
       el.style.display = 'flex';
     } else {
@@ -7536,7 +7531,7 @@ function applyUserPermissions() {
     // Current tab is not permitted for this user! Determine safe landing tab:
     let safeTab = 'dashboard';
     if (!canUserAccessTab(user, 'dashboard')) {
-      const firstAllowed = Object.keys(tabMapping).find(k => perms.includes(k));
+      const firstAllowed = Object.keys(tabMapping).find(k => checkPerm(perms, k));
       safeTab = firstAllowed || 'orders';
     }
     if (typeof switchAdminTab === 'function') {
@@ -7558,7 +7553,7 @@ function renderAdminUsers() {
   if (!tbody) return;
 
   const currentUser = state.currentUser;
-  const canManageUsers = isPrimaryAdmin(currentUser) || isDeveloperAdmin(currentUser) || (currentUser && currentUser.permissions && (currentUser.permissions.includes('users') || currentUser.permissions.includes('all')));
+  const canManageUsers = isPrimaryAdmin(currentUser) || isDeveloperAdmin(currentUser) || (currentUser && checkPerm(currentUser.permissions, 'users'));
   if (!canManageUsers) {
     tbody.innerHTML = `
       <tr>
@@ -7835,7 +7830,7 @@ window.copyPasswordDirectly = copyPasswordDirectly;
 // 16. Open Add / Edit User Modal
 function openAddUserModal(userId = null) {
   const curUser = state.currentUser;
-  const isCurAdmin = curUser && (curUser.role === 'admin' || curUser.role === 'developer_admin' || isPrimaryAdmin(curUser) || (curUser.permissions && (curUser.permissions.includes('users') || curUser.permissions.includes('all'))));
+  const isCurAdmin = curUser && (curUser.role === 'admin' || curUser.role === 'developer_admin' || isPrimaryAdmin(curUser) || checkPerm(curUser.permissions, 'users'));
   if (!isCurAdmin && curUser) {
     if (typeof showToast === 'function') showToast('⛔ عذراً، إدارة المستخدمين مخصصة للمدراء فقط');
     return;
@@ -7927,7 +7922,7 @@ function openAddUserModal(userId = null) {
           cb.checked = true;
           cb.disabled = true;
         } else {
-          cb.checked = perms.includes(p) || perms.includes('all');
+          cb.checked = checkPerm(perms, p);
           cb.disabled = false; // NEVER locked for Manager or Employee!
         }
       }
@@ -8342,27 +8337,26 @@ async function saveUserForm() {
           state.adminWhitelist.push(email);
         }
       }
+
+      localStorage.setItem('khudair_users', JSON.stringify(state.users));
+      if (state.adminWhitelist) {
+        localStorage.setItem('khudair_admin_whitelist', JSON.stringify(state.adminWhitelist));
+      }
+      if (window.TaswoqSync && typeof window.TaswoqSync.syncUp === 'function') {
+        window.TaswoqSync.syncUp({ users: state.users, adminWhitelist: state.adminWhitelist });
+      }
+      const roleTitle = isTargetingGM ? 'المدير العام 👑' : (selectedRole === 'admin' ? 'المدير 🛡️' : 'موظف 💼');
+      addAuditLog('USER_CREATED', `إضافة ${roleTitle}`, `تم إنشاء وتعيين حساب جديد باسم ${fullName} (${username}) بكلمة مرور مؤقتة`, createdUser ? createdUser.id : '', fullName);
+      showToast(`تم تعيين (${fullName}) كـ ${roleTitle} بنجاح! كلمة المرور: ${password} 🔑`);
     }
 
-    localStorage.setItem('khudair_users', JSON.stringify(state.users));
-    if (state.adminWhitelist) {
-      localStorage.setItem('khudair_admin_whitelist', JSON.stringify(state.adminWhitelist));
-    }
+    // Sync users immediately with server database
     if (window.TaswoqSync && typeof window.TaswoqSync.syncUp === 'function') {
       window.TaswoqSync.syncUp({ users: state.users, adminWhitelist: state.adminWhitelist });
     }
-    const roleTitle = isTargetingGM ? 'المدير العام 👑' : (selectedRole === 'admin' ? 'المدير 🛡️' : 'موظف 💼');
-    addAuditLog('USER_CREATED', `إضافة ${roleTitle}`, `تم إنشاء وتعيين حساب جديد باسم ${fullName} (${username}) بكلمة مرور مؤقتة`, createdUser ? createdUser.id : '', fullName);
-    showToast(`تم تعيين (${fullName}) كـ ${roleTitle} بنجاح! كلمة المرور: ${password} 🔑`);
+    closeAddUserModal();
+    renderAdminUsers();
   }
-
-  // Sync users immediately with server database
-  if (window.TaswoqSync && typeof window.TaswoqSync.syncUp === 'function') {
-    window.TaswoqSync.syncUp({ users: state.users, adminWhitelist: state.adminWhitelist });
-  }
-  closeAddUserModal();
-  renderAdminUsers();
-}
 
 // 20. Toggle User Status (Enable / Disable via dedicated API)
 async function toggleUserStatus(userId) {
@@ -8459,19 +8453,58 @@ function generateResetModalPassword() {
 }
 window.generateResetModalPassword = generateResetModalPassword;
 
-function copyResetModalPassword() {
+function copyResetModalPassword(btn) {
   const pInput = document.getElementById('reset-pwd-input') || document.getElementById('reset-pwd-display');
   const val = pInput ? (pInput.tagName === 'INPUT' ? pInput.value : pInput.textContent).trim() : '';
+
+  const targetBtn = (btn instanceof HTMLElement ? btn : null)
+    || (typeof event !== 'undefined' && event && event.target ? event.target.closest('button') : null)
+    || document.getElementById('btn-copy-reset-pwd')
+    || document.querySelector('button[onclick*="copyResetModalPassword"]');
+
+  const showCopiedState = () => {
+    if (targetBtn) {
+      if (!targetBtn.dataset.origHtml) {
+        targetBtn.dataset.origHtml = targetBtn.innerHTML;
+      }
+      targetBtn.innerHTML = '✅ تم النسخ';
+      targetBtn.style.color = '#059669';
+      targetBtn.style.borderColor = '#10b981';
+      targetBtn.style.background = 'rgba(16, 185, 129, 0.08)';
+
+      clearTimeout(targetBtn._copyTimer);
+      targetBtn._copyTimer = setTimeout(() => {
+        targetBtn.innerHTML = targetBtn.dataset.origHtml || '📋 نسخ';
+        targetBtn.style.color = '';
+        targetBtn.style.borderColor = '';
+        targetBtn.style.background = '';
+      }, 1800);
+    }
+  };
+
   if (val) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(val).then(() => {
+        showCopiedState();
         if (typeof showToast === 'function') showToast(`تم نسخ كلمة المرور: ${val} 📋`);
       }).catch(() => {
+        showCopiedState();
         if (typeof showToast === 'function') showToast(`تم نسخ كلمة المرور: ${val} 📋`);
       });
     } else {
+      try {
+        const tempInp = document.createElement('textarea');
+        tempInp.value = val;
+        document.body.appendChild(tempInp);
+        tempInp.select();
+        document.execCommand('copy');
+        document.body.removeChild(tempInp);
+      } catch (e) {}
+      showCopiedState();
       if (typeof showToast === 'function') showToast(`تم نسخ كلمة المرور: ${val} 📋`);
     }
+  } else {
+    showCopiedState();
   }
 }
 window.copyResetModalPassword = copyResetModalPassword;
@@ -9085,7 +9118,7 @@ function exportAuditLogsCsv() {
 // 25. Admin Whitelist Management
 function openAdminWhitelistModal() {
   const curUser = state.currentUser;
-  const isAdmin = curUser && (curUser.role === 'admin' || (curUser.permissions && curUser.permissions.includes('all')));
+  const isAdmin = curUser && (curUser.role === 'admin' || isPrimaryAdmin(curUser) || checkPerm(curUser.permissions, 'all'));
   if (!isAdmin) {
     if (typeof showToast === 'function') showToast('⛔ عذراً، إدارة القائمة البيضاء مخصصة للمدير العام فقط');
     return;

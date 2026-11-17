@@ -1389,29 +1389,6 @@
             <div
               style="font-weight: 900; font-size: 1.1rem; color: var(--text-main); display: flex; align-items: center; gap: 10px; line-height: 1.2;">
               <span class="top-header-title">لوحة تحكم تسوق</span>
-
-              <!-- SYNC STATUS WIDGET -->
-              <div id="admin-sync-widget"
-                style="display: inline-flex; align-items: center; gap: 8px; background: rgba(6, 78, 43, 0.08); border: 1px solid rgba(6, 78, 43, 0.2); padding: 5px 14px; border-radius: 30px; font-size: 0.82rem; font-weight: 700;">
-                <span id="sync-status-indicator"
-                  style="width: 9px; height: 9px; border-radius: 50%; background: #10B981; display: inline-block; box-shadow: 0 0 8px #10B981;"></span>
-                <span id="sync-status-text" style="color: var(--primary-700);">متصل بخادم المزامنة 🟢</span>
-                <button type="button" onclick="openAdminSyncModal()"
-                  style="background: var(--primary-700); color: #fff; border: none; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; cursor: pointer; display: flex; align-items: center; gap: 4px; box-shadow: 0 2px 6px rgba(0,0,0,0.12);">
-                  <span>⚙️ إعدادات الخادم والمزامنة</span>
-                </button>
-                <button type="button" onclick="triggerManualSync()" title="تحديث المزامنة الآن"
-                  style="background: transparent; border: none; cursor: pointer; font-size: 1rem; line-height: 1; padding: 2px 4px;">
-                  🔄
-                </button>
-              </div>
-
-              <!-- BACKEND SOURCE BADGE (بيان مصدر البيانات الصريح) -->
-              <span id="admin-backend-source-badge" class="top-header-badge" onclick="openAdminSyncModal()" title="انقر لعرض وضبط خادم ومصدر البيانات"
-                style="font-size: 0.75rem; font-weight: 800; color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; padding: 4px 12px; border-radius: 20px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.2s;">
-                <span style="width: 7px; height: 7px; border-radius: 50%; background: #10b981;"></span>
-                ☁️ متصل بـ PostgreSQL المشتركة
-              </span>
             </div>
             <div class="top-header-sub"
               style="font-size: 0.76rem; color: var(--text-muted); margin-top: 3px; font-weight: 600;">
@@ -4140,7 +4117,7 @@
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
             <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted);">كلمة المرور المؤقتة الجديدة:</div>
             <div style="display: inline-flex; gap: 8px; align-items: center;">
-              <button type="button" onclick="copyResetModalPassword()" title="نسخ كلمة المرور"
+              <button type="button" id="btn-copy-reset-pwd" onclick="copyResetModalPassword(this)" title="نسخ كلمة المرور"
                 style="padding: 5px 12px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); transition: all 0.2s ease;">
                 📋 نسخ
               </button>
@@ -4387,9 +4364,13 @@
   <script>
     // Tab switcher for dedicated admin layout with strict RBAC security check
     function switchAdminTab(tabKey, el) {
-      if (typeof verifyCurrentSessionActive === 'function') {
-        const isValid = verifyCurrentSessionActive(true);
-        if (!isValid) return false;
+      try {
+        if (typeof verifyCurrentSessionActive === 'function') {
+          const isValid = verifyCurrentSessionActive(true);
+          if (!isValid) return false;
+        }
+      } catch (err) {
+        console.warn('[switchAdminTab] verifyCurrentSessionActive check warning:', err);
       }
 
       const user = (typeof state !== 'undefined') ? state.currentUser : null;
@@ -4407,21 +4388,23 @@
       }
 
       // RBAC Security Check: Block unauthorized users from opening protected tabs
-      if (user && typeof canUserAccessTab === 'function') {
-        if (!canUserAccessTab(user, tabKey)) {
-          if (typeof sfx !== 'undefined' && sfx.playError) sfx.playError();
-          if (typeof showToast === 'function') {
-            showToast('⛔ عذراً، لا تملك الصلاحية للوصول إلى هذا القسم');
+      if (typeof canUserAccessTab === 'function') {
+        try {
+          if (!canUserAccessTab(user, tabKey)) {
+            if (typeof sfx !== 'undefined' && sfx.playError) sfx.playError();
+            if (typeof showToast === 'function') {
+              showToast('⛔ عذراً، لا تملك الصلاحية للوصول إلى هذا القسم');
+            }
+            return false;
           }
-          return false;
+        } catch (permErr) {
+          console.warn('[switchAdminTab] canUserAccessTab check error:', permErr);
         }
       } else if (user && (tabKey === 'users' || tabKey === 'settings')) {
         const perms = user.permissions || [];
-        const hasAll = Array.isArray(perms) ? perms.includes('all') : Boolean(perms && perms['all']);
-        const hasSpecificPerm = Array.isArray(perms)
-          ? (perms.includes(tabKey) || perms.includes(`${tabKey}:read`) || perms.includes(`${tabKey}:write`))
-          : Boolean(perms && (perms[tabKey] || perms[`${tabKey}:read`] || perms[`${tabKey}:write`]));
-        const isAllowed = (typeof isPrimaryAdmin === 'function' && isPrimaryAdmin(user)) || (user.role === 'developer_admin') || hasAll || hasSpecificPerm;
+        const hasAll = (typeof checkPerm === 'function') ? checkPerm(perms, 'all') : (Array.isArray(perms) ? perms.includes('all') : Boolean(perms && perms['all']));
+        const hasSpecific = (typeof checkPerm === 'function') ? checkPerm(perms, tabKey) : (Array.isArray(perms) ? perms.includes(tabKey) : Boolean(perms && perms[tabKey]));
+        const isAllowed = (typeof isPrimaryAdmin === 'function' && isPrimaryAdmin(user)) || (user.role === 'developer_admin') || (user.role === 'primary_admin') || (user.isPrimaryAdmin === true) || hasAll || hasSpecific;
         if (!isAllowed) {
           if (typeof showToast === 'function') {
             showToast('⛔ عذراً، لا تملك الصلاحية للوصول إلى هذا القسم');
@@ -4447,18 +4430,26 @@
       const target = document.getElementById(`panel-${tabKey}`);
       if (target) {
         target.classList.add('active');
-        // Always render users table when opening users panel
+        // Render section data dynamically upon tab activation
+        if (tabKey === 'orders' && typeof renderAdminOrders === 'function') {
+          try { renderAdminOrders(); } catch(e) { console.warn(e); }
+        }
+        if (tabKey === 'products' && typeof renderAdminProducts === 'function') {
+          try { renderAdminProducts(); } catch(e) { console.warn(e); }
+        }
         if (tabKey === 'users' && typeof renderAdminUsers === 'function') {
-          renderAdminUsers();
+          try { renderAdminUsers(); } catch(e) { console.warn(e); }
         }
         if (tabKey === 'delivery') {
-          if (typeof renderAdminDeliverySettings === 'function') renderAdminDeliverySettings();
-          if (typeof renderAdminWallets === 'function') renderAdminWallets();
+          try { if (typeof renderAdminDeliverySettings === 'function') renderAdminDeliverySettings(); } catch(e){}
+          try { if (typeof renderAdminWallets === 'function') renderAdminWallets(); } catch(e){}
         }
       }
 
       // Auto-close mobile drawer
-      if (typeof closeMobileSidebar === 'function') closeMobileSidebar();
+      if (typeof closeMobileSidebar === 'function') {
+        try { closeMobileSidebar(); } catch(e) {}
+      }
 
       // Scroll to top
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -4894,6 +4885,12 @@
     // فحص صلاحية الجلسة تلقائياً عند فتح لوحة التحكم والتحويل إلى /login عند غياب الجلسة
     document.addEventListener('DOMContentLoaded', async () => {
       const layout = document.querySelector('.admin-standalone-layout');
+      try {
+        const cachedUser = localStorage.getItem('taswoq_active_user') || localStorage.getItem('tasweeq_current_user');
+        if (cachedUser && typeof state !== 'undefined' && !state.currentUser) {
+          state.currentUser = JSON.parse(cachedUser);
+        }
+      } catch(e) {}
       if (window.TaswoqSync && typeof window.TaswoqSync.checkAuth === 'function') {
         const auth = await window.TaswoqSync.checkAuth();
         if (auth && auth.authenticated && auth.user) {
@@ -4908,8 +4905,12 @@
           if (layout) layout.style.display = 'grid';
 
           // تصيير بيانات الإدارة وتطبيق الصلاحيات
-          if (typeof renderAdminAll === 'function') renderAdminAll();
-          if (typeof applyUserPermissions === 'function') applyUserPermissions();
+          if (typeof applyUserPermissions === 'function') {
+            try { applyUserPermissions(); } catch (e) { console.warn(e); }
+          }
+          if (typeof renderAdminAll === 'function') {
+            try { renderAdminAll(); } catch (e) { console.warn(e); }
+          }
 
           // مزامنة أحدث بيانات الطلبات والكتالوج من الخادم فور تأكيد الجلسة
           if (window.TaswoqSync && typeof window.TaswoqSync.syncDown === 'function') {

@@ -532,8 +532,7 @@
       btn.innerHTML = '<span>جاري التحقق والمصادقة... ⏳</span>';
 
       try {
-        const serverUrl = localStorage.getItem('taswoq_server_url') || '';
-        const apiEndpoint = serverUrl ? `${serverUrl.replace(/\/+$/, '')}/api/auth/login` : '/api/auth/login';
+        const apiEndpoint = '/api/auth/login';
         const res = await fetch(apiEndpoint, {
           method: 'POST',
           credentials: 'same-origin',
@@ -586,8 +585,7 @@
       btn.textContent = 'جاري التحقق من الرمز... ⏳';
 
       try {
-        const serverUrl = localStorage.getItem('taswoq_server_url') || '';
-        const apiEndpoint = serverUrl ? `${serverUrl.replace(/\/+$/, '')}/api/auth/developer/login` : '/api/auth/developer/login';
+        const apiEndpoint = '/api/auth/developer/login';
         const res = await fetch(apiEndpoint, {
           method: 'POST',
           credentials: 'same-origin',
